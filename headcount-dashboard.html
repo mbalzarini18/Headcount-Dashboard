@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Headcount Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow-x: hidden; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; color: #1a1a2e; }
+
+    header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: white; padding: 14px 20px;
+      display: flex; align-items: center; justify-content: space-between;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.3); width: 100%;
+    }
+    header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+    header .header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+    header span { font-size: 12px; opacity: 0.6; }
+    #last-updated { font-size: 11px; opacity: 0.5; }
+
+    /* Loading overlay */
+    #loading-overlay {
+      position: fixed; inset: 0; background: rgba(240,242,245,0.92);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 12px; z-index: 999;
+    }
+    #loading-overlay.hidden { display: none; }
+    .spinner { width: 32px; height: 32px; border: 3px solid #e5e7eb; border-top-color: #6366f1; border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading-overlay p { font-size: 13px; color: #6b7280; }
+
+    .filters {
+      background: white; padding: 10px 20px;
+      display: flex; gap: 16px; align-items: center;
+      border-bottom: 1px solid #e5e7eb; flex-wrap: wrap; width: 100%;
+    }
+    .filters label { font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
+    .filters select {
+      padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 8px;
+      font-size: 13px; background: white; cursor: pointer; color: #374151;
+      outline: none; transition: border-color 0.2s;
+    }
+    .filters select:focus { border-color: #6366f1; }
+    .filter-group { display: flex; align-items: center; gap: 8px; }
+
+    .main { padding: 16px 20px; width: 100%; }
+
+    .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; width: 100%; }
+    .kpi-card { background: white; border-radius: 12px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); border-left: 4px solid #6366f1; }
+    .kpi-card.green { border-left-color: #10b981; }
+    .kpi-card.orange { border-left-color: #f59e0b; }
+    .kpi-card.red { border-left-color: #ef4444; }
+    .kpi-card.blue { border-left-color: #3b82f6; }
+    .kpi-label { font-size: 10px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
+    .kpi-value { font-size: 28px; font-weight: 700; color: #111827; line-height: 1; }
+    .kpi-sub { font-size: 11px; color: #6b7280; margin-top: 4px; }
+    .kpi-delta { font-size: 11px; font-weight: 600; margin-top: 4px; }
+    .kpi-delta.down { color: #ef4444; }
+    .kpi-delta.up { color: #10b981; }
+
+    .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; width: 100%; }
+    .chart-card { background: white; border-radius: 12px; padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); min-width: 0; }
+    .chart-card.full-width { grid-column: 1 / -1; }
+    .chart-title { font-size: 13px; font-weight: 700; color: #374151; margin-bottom: 2px; }
+    .chart-subtitle { font-size: 11px; color: #9ca3af; margin-bottom: 14px; }
+    .chart-wrap { position: relative; height: 220px; width: 100%; }
+    .chart-wrap.tall { height: 260px; }
+
+    .error-banner {
+      background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px;
+      padding: 12px 16px; color: #991b1b; font-size: 13px; margin-bottom: 16px; display: none;
+    }
+
+    @media (max-width: 768px) {
+      .chart-grid { grid-template-columns: 1fr; }
+      .kpi-row { grid-template-columns: repeat(2, 1fr); }
+      .main { padding: 12px; }
+      header { padding: 12px 16px; }
+      .filters { padding: 10px 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <p>Loading spreadsheet data…</p>
+</div>
+
+<header>
+  <h1>📊 Headcount Dashboard</h1>
+  <div class="header-right">
+    <span>May – December 2026</span>
+    <span id="last-updated"></span>
+  </div>
+</header>
+
+<div class="filters">
+  <div class="filter-group">
+    <label for="f-campaign">Campaign</label>
+    <select id="f-campaign" onchange="render()"><option value="All">All</option></select>
+  </div>
+  <div class="filter-group">
+    <label for="f-location">Location</label>
+    <select id="f-location" onchange="render()"><option value="All">All</option></select>
+  </div>
+  <div class="filter-group">
+    <label for="f-channel">Channel</label>
+    <select id="f-channel" onchange="render()"><option value="All">All</option></select>
+  </div>
+  <div class="filter-group">
+    <label for="f-tier">Tier</label>
+    <select id="f-tier" onchange="render()"><option value="All">All</option></select>
+  </div>
+</div>
+
+<div class="main">
+  <div class="error-banner" id="error-banner"></div>
+  <div class="kpi-row" id="kpi-row"></div>
+  <div class="chart-grid">
+    <div class="chart-card full-width">
+      <div class="chart-title">Total Headcount Trend</div>
+      <div class="chart-subtitle">Monthly totals across selected filters</div>
+      <div class="chart-wrap tall"><canvas id="chart-trend"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Headcount by Campaign</div>
+      <div class="chart-subtitle">Stacked by campaign per month</div>
+      <div class="chart-wrap"><canvas id="chart-campaign"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Headcount by Location</div>
+      <div class="chart-subtitle">Total headcount per vendor / site (May)</div>
+      <div class="chart-wrap"><canvas id="chart-location"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Channel Split</div>
+      <div class="chart-subtitle">Phone/Casework vs Chat (May)</div>
+      <div class="chart-wrap"><canvas id="chart-channel"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Tier Split</div>
+      <div class="chart-subtitle">Tier 1 vs Tier 2 (May)</div>
+      <div class="chart-wrap"><canvas id="chart-tier"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────
+const SHEET_ID  = '1LA8iKD1vhi3wf945Owhb3GBpIyArXqKJfZUtYNqldDc';
+const SHEET_GID = '0'; // change if your data is on a different tab
+const MONTHS    = ['May','June','July','August','September','October','November','December'];
+const COLORS    = {
+  campaign: ['#6366f1','#10b981','#f59e0b','#ef4444'],
+  location: ['#3b82f6','#8b5cf6','#ec4899','#14b8a6','#f97316','#84cc16'],
+  channel:  ['#6366f1','#10b981'],
+  tier:     ['#3b82f6','#f59e0b'],
+};
+
+let RAW = [];
+const charts = {};
+
+// ── Google Visualization API (JSONP — bypasses CORS) ─────────────────────
+async function loadDataViaGViz() {
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&gid=${SHEET_GID}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  // Strip the /*O_o*/ wrapper Google wraps around the JSON
+  const match = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]*)\)\s*;?\s*$/);
+  if (!match) throw new Error('Unexpected response from Google Sheets');
+  const data = JSON.parse(match[1]);
+  if (data.status !== 'ok') throw new Error(data.errors?.[0]?.detailed_message || 'Google Sheets returned an error');
+  const cols = data.table.cols.map(c => c.label);
+  return (data.table.rows || []).map(row => {
+    const obj = {};
+    cols.forEach((col, i) => { obj[col] = row.c[i] ? row.c[i].v : null; });
+    return obj;
+  }).filter(r => r.Campaign && r.Campaign !== 'Campaign');
+}
+
+function toDataRow(r) {
+  return {
+    campaign: r.Campaign || '',
+    channel:  r.Channel  || '',
+    tier:     r.Tier     || '',
+    location: r.Location || '',
+    May:       +r.May        || 0,
+    June:      +r.June       || 0,
+    July:      +r.July       || 0,
+    August:    +r.August     || 0,
+    September: +r.September  || 0,
+    October:   +r.October    || 0,
+    November:  +r.November   || 0,
+    December:  +r.December   || 0,
+  };
+}
+
+async function loadData() {
+  try {
+    const rows = await loadDataViaGViz();
+    RAW = rows.map(toDataRow);
+    if (RAW.length === 0) throw new Error('No rows found — check the sheet tab GID');
+    populateFilters();
+    document.getElementById('last-updated').textContent =
+      'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    render();
+  } catch(e) {
+    const banner = document.getElementById('error-banner');
+    banner.style.display = 'block';
+    banner.textContent = '⚠️ Could not load sheet data: ' + e.message;
+    console.error(e);
+  } finally {
+    document.getElementById('loading-overlay').classList.add('hidden');
+  }
+}
+
+// ── Filters ───────────────────────────────────────────────────────────────
+function populateFilters() {
+  const dims = { campaign: new Set(), location: new Set(), channel: new Set(), tier: new Set() };
+  RAW.forEach(r => { dims.campaign.add(r.campaign); dims.location.add(r.location); dims.channel.add(r.channel); dims.tier.add(r.tier); });
+  [['f-campaign','campaign'],['f-location','location'],['f-channel','channel'],['f-tier','tier']].forEach(([id, key]) => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = '<option value="All">All</option>';
+    [...dims[key]].filter(Boolean).sort().forEach(v => {
+      const opt = document.createElement('option'); opt.value = v; opt.textContent = v; sel.appendChild(opt);
+    });
+  });
+}
+
+function getFilters() {
+  return {
+    campaign: document.getElementById('f-campaign').value,
+    location: document.getElementById('f-location').value,
+    channel:  document.getElementById('f-channel').value,
+    tier:     document.getElementById('f-tier').value,
+  };
+}
+function filtered() {
+  const f = getFilters();
+  return RAW.filter(r =>
+    (f.campaign === 'All' || r.campaign === f.campaign) &&
+    (f.location === 'All' || r.location === f.location) &&
+    (f.channel  === 'All' || r.channel  === f.channel)  &&
+    (f.tier     === 'All' || r.tier     === f.tier)
+  );
+}
+function sumBy(rows, key) { return rows.reduce((a, r) => a + (r[key] || 0), 0); }
+function sumMonths(rows) { return MONTHS.map(m => sumBy(rows, m)); }
+function destroyChart(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+// ── KPIs ──────────────────────────────────────────────────────────────────
+function renderKPIs(rows) {
+  const may = sumBy(rows, 'May'), dec = sumBy(rows, 'December');
+  const delta = dec - may, pct = may > 0 ? ((delta / may) * 100).toFixed(1) : 0;
+  const campaigns = [...new Set(RAW.map(r => r.campaign))];
+  let bigCampaign = '', bigVal = 0;
+  campaigns.forEach(c => { const v = sumBy(rows.filter(r => r.campaign === c), 'May'); if (v > bigVal) { bigVal = v; bigCampaign = c; } });
+  const locations = [...new Set(RAW.map(r => r.location))];
+  let bigLoc = '', bigLocVal = 0;
+  locations.forEach(l => { const v = sumBy(rows.filter(r => r.location === l), 'May'); if (v > bigLocVal) { bigLocVal = v; bigLoc = l; } });
+  document.getElementById('kpi-row').innerHTML = `
+    <div class="kpi-card">
+      <div class="kpi-label">May Headcount</div><div class="kpi-value">${may.toLocaleString()}</div><div class="kpi-sub">Start of period</div>
+    </div>
+    <div class="kpi-card ${delta < 0 ? 'red' : 'green'}">
+      <div class="kpi-label">December Headcount</div><div class="kpi-value">${dec.toLocaleString()}</div>
+      <div class="kpi-delta ${delta < 0 ? 'down' : 'up'}">${delta >= 0 ? '+' : ''}${delta} (${pct}%) vs May</div>
+    </div>
+    <div class="kpi-card blue">
+      <div class="kpi-label">Largest Campaign (May)</div><div class="kpi-value" style="font-size:20px">${bigCampaign || '—'}</div><div class="kpi-sub">${bigVal.toLocaleString()} headcount</div>
+    </div>
+    <div class="kpi-card orange">
+      <div class="kpi-label">Top Location (May)</div><div class="kpi-value" style="font-size:20px">${bigLoc || '—'}</div><div class="kpi-sub">${bigLocVal.toLocaleString()} headcount</div>
+    </div>`;
+}
+
+// ── Charts ────────────────────────────────────────────────────────────────
+function renderTrend(rows) {
+  destroyChart('trend');
+  charts['trend'] = new Chart(document.getElementById('chart-trend'), {
+    type: 'line',
+    data: { labels: MONTHS, datasets: [{ label: 'Total Headcount', data: sumMonths(rows), borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.08)', fill: true, tension: 0.4, pointRadius: 5, pointBackgroundColor: '#6366f1', borderWidth: 2.5 }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y.toLocaleString()} HC` } } }, scales: { y: { beginAtZero: false, grid: { color: '#f3f4f6' }, ticks: { font: { size: 11 } } }, x: { grid: { display: false }, ticks: { font: { size: 11 } } } } }
+  });
+}
+
+function renderCampaign(rows) {
+  destroyChart('campaign');
+  const campaigns = [...new Set(RAW.map(r => r.campaign))].sort();
+  charts['campaign'] = new Chart(document.getElementById('chart-campaign'), {
+    type: 'bar',
+    data: { labels: MONTHS, datasets: campaigns.map((c, i) => ({ label: c, data: sumMonths(rows.filter(r => r.campaign === c)), backgroundColor: COLORS.campaign[i % COLORS.campaign.length], stack: 'stack', borderRadius: 2 })) },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 12 } } }, scales: { y: { stacked: true, grid: { color: '#f3f4f6' }, ticks: { font: { size: 11 } } }, x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } } } }
+  });
+}
+
+function renderLocation(rows) {
+  destroyChart('location');
+  const locations = [...new Set(RAW.map(r => r.location))].sort();
+  charts['location'] = new Chart(document.getElementById('chart-location'), {
+    type: 'bar',
+    data: { labels: locations, datasets: [{ label: 'May HC', data: locations.map(l => sumBy(rows.filter(r => r.location === l), 'May')), backgroundColor: COLORS.location, borderRadius: 6 }] },
+    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { color: '#f3f4f6' }, ticks: { font: { size: 11 } } }, y: { grid: { display: false }, ticks: { font: { size: 11 } } } } }
+  });
+}
+
+function renderChannel(rows) {
+  destroyChart('channel');
+  const channels = [...new Set(RAW.map(r => r.channel))].sort();
+  charts['channel'] = new Chart(document.getElementById('chart-channel'), {
+    type: 'doughnut',
+    data: { labels: channels, datasets: [{ data: channels.map(c => sumBy(rows.filter(r => r.channel === c), 'May')), backgroundColor: COLORS.channel, borderWidth: 2 }] },
+    options: { responsive: true, maintainAspectRatio: false, cutout: '60%', plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 12 } }, tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed.toLocaleString()}` } } } }
+  });
+}
+
+function renderTier(rows) {
+  destroyChart('tier');
+  const tiers = [...new Set(RAW.map(r => r.tier))].sort();
+  charts['tier'] = new Chart(document.getElementById('chart-tier'), {
+    type: 'doughnut',
+    data: { labels: tiers, datasets: [{ data: tiers.map(t => sumBy(rows.filter(r => r.tier === t), 'May')), backgroundColor: COLORS.tier, borderWidth: 2 }] },
+    options: { responsive: true, maintainAspectRatio: false, cutout: '60%', plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 12 } }, tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed.toLocaleString()}` } } } }
+  });
+}
+
+function render() {
+  const rows = filtered();
+  renderKPIs(rows); renderTrend(rows); renderCampaign(rows);
+  renderLocation(rows); renderChannel(rows); renderTier(rows);
+}
+
+// notify Google Sites iframe height
+function notifyHeight() { window.parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*'); }
+window.addEventListener('load', notifyHeight);
+window.addEventListener('resize', notifyHeight);
+
+// kick off
+loadData();
+</script>
+</body>
+</html>
